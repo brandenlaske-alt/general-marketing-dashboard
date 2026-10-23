@@ -5,6 +5,35 @@ export type Location = {
   state: string;
   region: string;
   brand: "Standard" | "Premium" | "Enterprise";
+  lat: number;
+  lon: number;
+};
+
+export type ChannelPerformance = {
+  channel: "Google Search" | "Meta" | "YouTube / OTT" | "Programmatic Display" | "Microsoft" | "TikTok";
+  spend: number;
+  spendPrev: number;
+  impressions: number;
+  clicks: number;
+  leads: number;
+  leadsPrev: number;
+};
+
+export type KeywordRanking = {
+  keyword: string;
+  intent: "Brand" | "Local" | "Commercial" | "Informational";
+  position: number;
+  positionPrev: number;
+  volume: number;
+  url: string;
+};
+
+export type ZipHotspot = {
+  zip: string;
+  lat: number;
+  lon: number;
+  leads: number;
+  city?: string;
 };
 
 export type MetricPoint = {

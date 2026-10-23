@@ -7,6 +7,12 @@ const TOOLS = [
     description: "Generate a properly-tagged destination URL for a QR code or campaign — pastes directly into your ad platform or print asset.",
     meta: "URL builder",
   },
+  {
+    href: "/tools/catchment-map",
+    title: "Catchment Map",
+    description: "Pick a location and see the top ZIP codes within its catchment area, sized by lead volume. Great for prospecting + direct-mail targeting.",
+    meta: "Geo analytics",
+  },
 ];
 
 export default function ToolsPage() {

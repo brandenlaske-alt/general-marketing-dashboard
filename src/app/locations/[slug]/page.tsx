@@ -2,9 +2,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { KpiStrip } from "@/components/dashboard/kpi-strip";
 import { TrendChart } from "@/components/dashboard/trend-chart";
+import { PpcBreakdown } from "@/components/dashboard/ppc-breakdown";
+import { SeoRankingsTable } from "@/components/dashboard/seo-rankings-table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { locationBySlug, metricsBySlug, LOCATIONS } from "@/lib/mock-data";
+import { locationBySlug, metricsBySlug, LOCATIONS, channelBreakdown, keywordRankings } from "@/lib/mock-data";
 
 export function generateStaticParams() {
   return LOCATIONS.map((l) => ({ slug: l.slug }));
@@ -44,6 +46,24 @@ export default async function LocationDetailPage({ params }: { params: Promise<{
         </CardHeader>
         <CardContent>
           <TrendChart data={m.trend} label="Sessions" />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Paid media performance by channel</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <PpcBreakdown channels={channelBreakdown(slug)} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Keyword rankings</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <SeoRankingsTable rankings={keywordRankings(slug)} />
         </CardContent>
       </Card>
     </div>
