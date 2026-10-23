@@ -171,23 +171,18 @@ export function keywordRankings(slug: string): KeywordRanking[] {
   });
 }
 
-// Catchment ZIP hotspots around a location
-export function catchmentHotspots(slug: string, radiusMi = 60, count = 18): ZipHotspot[] {
-  const loc = locationBySlug(slug);
-  if (!loc) return [];
+// Catchment ZIP hotspots — generates mock lead counts keyed to real ZIPs
+// in the bundled public/zctas.geojson. Pass in the list of ZIP codes within
+// range (from the loaded GeoJSON) and this returns a deterministic lead-count
+// map so the heatmap looks organic.
+export function catchmentCountsForZips(slug: string, zips: string[]): Map<string, number> {
   const rand = seedRandom(slug.length * 31 + 7);
-  const miDeg = 1 / 69; // ~1 degree lat ≈ 69mi
-  const out: ZipHotspot[] = [];
-  for (let i = 0; i < count; i++) {
-    const r = radiusMi * Math.sqrt(rand()); // uniform area
-    const theta = rand() * Math.PI * 2;
-    const lat = loc.lat + Math.cos(theta) * r * miDeg;
-    const lon = loc.lon + Math.sin(theta) * r * miDeg / Math.cos((loc.lat * Math.PI) / 180);
-    const leads = Math.max(1, Math.round((count - i) * (0.6 + rand() * 0.8)));
-    out.push({
-      zip: String(10000 + Math.floor(rand() * 89999)),
-      lat, lon, leads,
-    });
-  }
-  return out.sort((a, b) => b.leads - a.leads);
+  const sorted = [...zips].sort(() => rand() - 0.5);
+  const out = new Map<string, number>();
+  sorted.forEach((zip, i) => {
+    // Decay with rank + jitter: top ZIPs get 20-40 leads, long tail gets 1-5
+    const base = Math.max(1, Math.round(45 * Math.exp(-i / 30) * (0.6 + rand() * 0.8)));
+    out.set(zip, base);
+  });
+  return out;
 }

@@ -1,93 +1,104 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { MapContainer, TileLayer, GeoJSON, CircleMarker, Popup, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import type L from "leaflet";
-import type { Feature, FeatureCollection, Polygon } from "geojson";
-import { Delaunay } from "d3-delaunay";
-import type { Location, ZipHotspot } from "@/lib/types";
+import type { Feature, FeatureCollection, Geometry } from "geojson";
+import type { Location } from "@/lib/types";
+import { catchmentCountsForZips } from "@/lib/mock-data";
 
-type ZipFeatureProps = { zip: string; leads: number };
+type ZipProps = { zip: string; state: string };
 
-function FitToPoints({ points }: { points: Array<{ lat: number; lon: number }> }) {
+/** Fit viewport to a bounding box around the location. */
+function FitToLocation({ location, radiusDeg = 0.45 }: { location: Location; radiusDeg?: number }) {
   const map = useMap();
   useEffect(() => {
-    if (points.length === 0) return;
-    const lats = points.map((p) => p.lat);
-    const lons = points.map((p) => p.lon);
     map.fitBounds(
       [
-        [Math.min(...lats), Math.min(...lons)],
-        [Math.max(...lats), Math.max(...lons)],
+        [location.lat - radiusDeg, location.lon - radiusDeg],
+        [location.lat + radiusDeg, location.lon + radiusDeg],
       ],
-      { padding: [40, 40] },
+      { padding: [20, 20] },
     );
-  }, [points, map]);
+  }, [location, radiusDeg, map]);
   return null;
-}
-
-/** Build Voronoi polygons around each hotspot — approximates ZIP code catchments
- *  without needing a real ZCTA GeoJSON file bundled into the template. */
-function buildZipPolygons(location: Location, hotspots: ZipHotspot[], paddingDeg = 1.2): FeatureCollection<Polygon, ZipFeatureProps> {
-  if (hotspots.length === 0) return { type: "FeatureCollection", features: [] };
-
-  const points: [number, number][] = hotspots.map((h) => [h.lon, h.lat]);
-  const lats = points.map((p) => p[1]);
-  const lons = points.map((p) => p[0]);
-  const bounds: [number, number, number, number] = [
-    Math.min(...lons) - paddingDeg,
-    Math.min(...lats) - paddingDeg,
-    Math.max(...lons) + paddingDeg,
-    Math.max(...lats) + paddingDeg,
-  ];
-
-  const delaunay = Delaunay.from(points);
-  const voronoi = delaunay.voronoi(bounds);
-
-  const features: Feature<Polygon, ZipFeatureProps>[] = [];
-  hotspots.forEach((h, i) => {
-    const poly = voronoi.cellPolygon(i);
-    if (!poly) return;
-    features.push({
-      type: "Feature",
-      properties: { zip: h.zip, leads: h.leads },
-      geometry: {
-        type: "Polygon",
-        coordinates: [poly.map(([x, y]) => [x, y])],
-      },
-    });
-  });
-
-  return { type: "FeatureCollection", features };
 }
 
 export function CatchmentMap({
   location,
-  hotspots,
+  onLeadStats,
 }: {
   location: Location;
-  hotspots: ZipHotspot[];
+  onLeadStats?: (stats: { totalLeads: number; topZips: Array<{ zip: string; leads: number }> }) => void;
 }) {
-  const maxLeads = Math.max(1, ...hotspots.map((h) => h.leads));
-  const allPoints = [{ lat: location.lat, lon: location.lon }, ...hotspots];
+  const [zctas, setZctas] = useState<FeatureCollection<Geometry, ZipProps> | null>(null);
 
-  const polygons = useMemo(() => buildZipPolygons(location, hotspots), [location, hotspots]);
+  useEffect(() => {
+    fetch("/zctas.geojson")
+      .then((r) => r.json())
+      .then((d: FeatureCollection<Geometry, ZipProps>) => setZctas(d))
+      .catch(() => setZctas(null));
+  }, []);
 
-  const styleFeature = (feature: Feature<Polygon, ZipFeatureProps> | undefined) => {
+  // Filter ZCTAs to those within ~0.5deg of the current location
+  const nearbyFeatures = useMemo(() => {
+    if (!zctas) return [] as Feature<Geometry, ZipProps>[];
+    const radius = 0.55;
+    const walk = (coords: unknown, found: [number, number]): [number, number] | null => {
+      if (!Array.isArray(coords)) return null;
+      if (typeof coords[0] === "number" && typeof coords[1] === "number") {
+        return coords as [number, number];
+      }
+      for (const c of coords) {
+        const pt = walk(c, found);
+        if (pt) return pt;
+      }
+      return null;
+    };
+    return zctas.features.filter((f) => {
+      const geom = f.geometry as { coordinates?: unknown } | null;
+      if (!geom || !("coordinates" in geom)) return false;
+      const sample = walk(geom.coordinates, [0, 0]);
+      if (!sample) return false;
+      const [x, y] = sample;
+      return Math.abs(y - location.lat) <= radius && Math.abs(x - location.lon) <= radius;
+    });
+  }, [zctas, location]);
+
+  const leadCounts = useMemo(() => {
+    const zips = nearbyFeatures.map((f) => f.properties.zip);
+    return catchmentCountsForZips(location.slug, zips);
+  }, [nearbyFeatures, location.slug]);
+
+  const maxLeads = useMemo(() => Math.max(1, ...Array.from(leadCounts.values())), [leadCounts]);
+  const totalLeads = useMemo(() => Array.from(leadCounts.values()).reduce((s, v) => s + v, 0), [leadCounts]);
+
+  useEffect(() => {
+    if (!onLeadStats) return;
+    const topZips = Array.from(leadCounts.entries())
+      .map(([zip, leads]) => ({ zip, leads }))
+      .sort((a, b) => b.leads - a.leads)
+      .slice(0, 24);
+    onLeadStats({ totalLeads, topZips });
+  }, [leadCounts, totalLeads, onLeadStats]);
+
+  const styleFeature = (feature: Feature<Geometry, ZipProps> | undefined) => {
     if (!feature) return {};
-    const leads = feature.properties.leads;
+    const leads = leadCounts.get(feature.properties.zip) ?? 0;
     const intensity = leads / maxLeads;
+    const fillOpacity = leads > 0 ? 0.15 + 0.55 * intensity : 0;
     return {
-      color: "#1e40af",
-      weight: 0.8,
+      color: "#9ca3af",
+      weight: 0.4,
       fillColor: "#2563eb",
-      fillOpacity: 0.15 + 0.55 * intensity,
+      fillOpacity,
     };
   };
 
-  const onEachFeature = (feature: Feature<Polygon, ZipFeatureProps>, layer: L.Layer) => {
-    const { zip, leads } = feature.properties;
+  const onEachFeature = (feature: Feature<Geometry, ZipProps>, layer: L.Layer) => {
+    const zip = feature.properties.zip;
+    const leads = leadCounts.get(zip) ?? 0;
     (layer as unknown as { bindTooltip: (s: string, opts?: object) => void }).bindTooltip(
       `<div style="font-size:11px;line-height:1.4;font-family:system-ui">
         <strong>ZIP ${zip}</strong><br/>
@@ -97,12 +108,22 @@ export function CatchmentMap({
     );
   };
 
-  const polygonKey = `${location.slug}-${hotspots.length}-${maxLeads}`;
+  const asFC: FeatureCollection<Geometry, ZipProps> = useMemo(
+    () => ({ type: "FeatureCollection", features: nearbyFeatures }),
+    [nearbyFeatures],
+  );
+
+  const geoJsonKey = `${location.slug}-${nearbyFeatures.length}`;
 
   return (
     <div className="relative h-[560px] w-full overflow-hidden rounded-lg border">
-      <MapContainer center={[location.lat, location.lon]} zoom={9} style={{ height: "100%", width: "100%" }} scrollWheelZoom>
-        {/* Esri Light Gray Canvas — clean neutral basemap for data overlays */}
+      <MapContainer
+        center={[location.lat, location.lon]}
+        zoom={10}
+        style={{ height: "100%", width: "100%" }}
+        scrollWheelZoom
+      >
+        {/* Esri Light Gray Canvas basemap — clean neutral surface for data overlays */}
         <TileLayer
           key="esri-light-base"
           attribution='Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'
@@ -116,12 +137,14 @@ export function CatchmentMap({
           maxZoom={16}
           opacity={0.9}
         />
-        <GeoJSON
-          key={polygonKey}
-          data={polygons}
-          style={styleFeature as unknown as L.PathOptions}
-          onEachFeature={onEachFeature}
-        />
+        {nearbyFeatures.length > 0 && (
+          <GeoJSON
+            key={geoJsonKey}
+            data={asFC}
+            style={styleFeature as unknown as L.PathOptions}
+            onEachFeature={onEachFeature}
+          />
+        )}
         <CircleMarker
           center={[location.lat, location.lon]}
           radius={7}
@@ -133,8 +156,15 @@ export function CatchmentMap({
             {location.city}, {location.state}
           </Popup>
         </CircleMarker>
-        <FitToPoints points={allPoints} />
+        <FitToLocation location={location} />
       </MapContainer>
+
+      {/* Loading state */}
+      {!zctas && (
+        <div className="absolute inset-0 z-[400] flex items-center justify-center bg-white/60 text-sm text-muted-foreground">
+          Loading ZIP boundaries…
+        </div>
+      )}
 
       {/* Legend */}
       <div className="absolute right-3 top-3 z-[400] rounded border bg-white/95 p-3 shadow-md">
@@ -144,7 +174,12 @@ export function CatchmentMap({
         <div className="flex items-center gap-2 text-[11px]">
           <span className="h-3 w-3" style={{ background: "#2563eb", opacity: 0.15 }} />
           <span className="text-muted-foreground">Low</span>
-          <span className="mx-1 h-3 w-6 rounded-sm" style={{ background: "linear-gradient(90deg, rgba(37,99,235,0.15), rgba(37,99,235,0.7))" }} />
+          <span
+            className="mx-1 h-3 w-6 rounded-sm"
+            style={{
+              background: "linear-gradient(90deg, rgba(37,99,235,0.15), rgba(37,99,235,0.7))",
+            }}
+          />
           <span className="text-muted-foreground">High</span>
         </div>
         <div className="mt-2 flex items-center gap-2 text-[11px]">
